@@ -362,3 +362,43 @@
   false)`) right after spawning, for whichever events have a confirmed
   property name. Zanik's is left `nil` (unconfirmed - not yet spawned
   in-game to dump its header). Not yet retested in-game.
+- 2026-09-17: the tome crash recurred - Mysterious Old Man's Tier1 Mining
+  tome crashed the game on a tutorial-complete character (`UE4SS.log`
+  frozen right after the `AddItemByData` attempt log line, no catchable
+  Lua error, no Windows Application-log crash event, no minidump anywhere -
+  same signature as ever). Investigated two theories, both ruled out:
+  - **Broken icon reference**: the game's own log (`RSDragonwilds.log`)
+    showed `Failed to find object ".../T_Icon_Skill_Tome_Mining"` at the
+    exact crash moment. Checked every backup log from the same play
+    session: the identical warning (plus a matching `T_Icon_Tag_Skill_*`
+    warning) fired for the Attack and Woodcutting tomes too, both of which
+    were given successfully (sessions ended with a clean `LogExit`, not a
+    crash). The missing concept-art icon is a shared, harmless, pre-existing
+    gap in the shipped build for every tome - not the crash trigger.
+  - **Untrained skill**: the character's `Saved/SaveCharacters/<name>.json`
+    has a `Skills.Skills` array of 10 entries, one sitting at `Xp: 0`,
+    raising the possibility that a tome's `AddItemByData` call touches
+    per-skill XP-tracking state that doesn't exist yet for an untrained
+    skill. Ruled out directly - confirmed the character's Mining skill
+    isn't untrained.
+  - No reproducible per-item differentiator found between the tomes that
+    worked and the one that didn't (same class, same asset mount, same
+    warning pattern, item package already resident in memory, inventory
+    had room). Leaves the leaner explanation on the table: this UE4SS
+    build already has documented unpredictable native-memory-safety issues
+    unrelated to any specific item (see the `LoopAsync` heap-corruption
+    note in `encounter.lua` and the `Ctrl+R` hot-reload crash noted below
+    under "Hot reloading") - a crash with zero trace anywhere is that
+    signature, not a data problem with one specific tome.
+- Started the `dropping_items` branch to explore giving items as physical
+  world pickups (`ItemHelperLibrary:SpawnAndLaunchItem_Sync`, found via the
+  SDK dump) instead of straight into inventory (`AddItemByData`), on the
+  theory that the drop path is the same one ordinary loot/resource drops
+  already use and should be more battle-tested. Added
+  `Config.GiveItemsAsWorldDrops` (default `false`) and `Encounter.dropItem`
+  as an opt-in alternate path alongside the existing `Encounter.giveItem`.
+  Not yet tested in-game - see `encounter.lua`'s `dropItem` comments for
+  the specific unknowns (chiefly: `ItemSpawnParameters.Transform` is a real
+  `FTransform` with an `FQuat` rotation, but the only proven-safe
+  transform-table shape in this codebase, reused here, was proven against a
+  different function's signature).

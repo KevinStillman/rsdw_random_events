@@ -110,6 +110,35 @@ Config.EncounterMaxWaitMs = 120000    -- despawn quietly if nobody presses F wit
 Config.EncounterGiveDelayMs = 3000    -- delay between line1 and giving the item(s)
 Config.EncounterDespawnDelayMs = 2500 -- delay between giving the item(s)/line2 and despawning
 
+-- ---------------------------------------------------------------------------
+-- EXPERIMENTAL: world-drop gifts instead of straight-to-inventory
+-- ---------------------------------------------------------------------------
+-- The tome crash (see encounter.lua's giveItem and CHANGELOG.md) never got a
+-- real root cause - it's an engine-level death with no catchable Lua error
+-- and no crash dump anywhere, and a 2026-09-17 session ruled out both of the
+-- two leading theories (a broken concept-art icon reference; the player's
+-- Mining skill being untrained). AddItemByData is a generic
+-- straight-into-inventory path; ItemHelperLibrary:SpawnAndLaunchItem_Sync
+-- (found via the SDK dump, /Script/Dominion.ItemHelperLibrary) is what
+-- actually drops a physical pickup into the world instead - the same
+-- mechanism behind ordinary loot/resource drops, so presumably far more
+-- battle-tested than shoving an item into inventory data from a class that
+-- was probably never meant to be handed out that way. Set true to route
+-- Encounter gifts through Encounter.dropItem (spawns the item on the ground
+-- at the NPC's feet) instead of Encounter.giveItem (AddItemByData straight
+-- to inventory). Untested in-game as of this writing - see dropItem's
+-- comments for the specific unknowns (Transform/FVector marshaling,
+-- WorldContextObject choice). Default false: this is a branch for exploring
+-- the idea, not yet something to ship on by default.
+Config.GiveItemsAsWorldDrops = false
+-- The base "drop a single ItemData as a physical pickup" class - other
+-- variants exist (BP_RuntimeSpawnedWorldItem_NoExpiry/_NoDelayForMagnet/
+-- _ProcessingStation) but this is the plain one, matching "drop it on the
+-- ground" rather than anything fancier.
+Config.WorldItemDropClassPath = "/Game/Gameplay/WorldItems/BP_RuntimeSpawnedWorldItem.BP_RuntimeSpawnedWorldItem_C"
+Config.ItemDropLaunchSpeed = 0.0          -- 0 = just place it, no toss/pop away from the spawn point
+Config.ItemDropLaunchAngleVariance = 0.0
+
 Config.MysteriousOldManLine1 = "Ah, so you are there. I hoped you would talk to me, I get so lonely. Here, have a present! I must be going now though."
 Config.MysteriousOldManLine2 = "Enjoy!"
 -- One entry is picked at random as the "present". Each entry is either a

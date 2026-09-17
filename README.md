@@ -213,6 +213,22 @@ this section just describes the current design.
 - **If nobody presses F**: each spawned NPC despawns quietly after
   `Config.EncounterMaxWaitMs` (2 min default) rather than lingering forever.
 
+**EXPERIMENTAL - world drops instead of inventory**: a 2026-09-17 Mining
+tome crash showed the "tome crash" (see CHANGELOG) isn't tied to a specific
+skill's tome or a broken icon reference - two other tomes were given
+successfully in the same play session with the identical warning signature,
+and the player's Mining skill wasn't untrained. With no reproducible
+per-item cause found, `Config.GiveItemsAsWorldDrops` (default `false`) routes
+gifts through `Encounter.dropItem` instead of `Encounter.giveItem`: it spawns
+the item as a physical pickup on the ground via
+`ItemHelperLibrary:SpawnAndLaunchItem_Sync` rather than injecting it into
+inventory via `AddItemByData`, on the theory that the drop path is the same
+one ordinary loot/resource drops already use in the base game, and is
+therefore more battle-tested than handing a class instance to a generic
+inventory-mutation call it may never have been designed for. See
+`encounter.lua`'s `dropItem` for the specific unknowns - this hasn't been
+run in-game yet.
+
 **Known limitation**: these events require the player's character to
 have completed the early tutorial content involving Doric/Vannaka/the
 Wise Old Man. Each of these NPCs carries its own `QuestData` and

@@ -131,6 +131,107 @@ local function giveItem(pc, gift)
     return allOk
 end
 
+-- EXPERIMENTAL alternative to giveItem - see config.lua's
+-- Config.GiveItemsAsWorldDrops comment for why this exists. Spawns the item
+-- as a physical world pickup at the NPC's feet via
+-- ItemHelperLibrary:SpawnAndLaunchItem_Sync instead of injecting it into the
+-- player's inventory via AddItemByData, on the theory that the drop path is
+-- the same one ordinary loot/resource drops use and is therefore far more
+-- exercised/trustworthy than shoving an item into inventory data directly.
+--
+-- Known unknowns, since this hasn't been run in-game yet:
+--   - ItemSpawnParameters.Transform is a real FTransform (Rotation is an
+--     FQuat), but the only proven-safe transform-table shape in this
+--     codebase is the {Translation, Rotation = {Yaw,Pitch,Roll}, Scale3D}
+--     one events.lua's trySpawnNearPlayer uses for
+--     BeginDeferredActorSpawnFromClass (a different function - confirmed
+--     in-game there). Reused verbatim here since it's the only pattern with
+--     a track record; whether UE4SS's struct marshaling actually converts
+--     that rotator-shaped table into the FQuat AddItemByData... er,
+--     SpawnAndLaunchItem_Sync expects is unconfirmed for this specific call.
+--   - LaunchDirection/Count/etc. are given as plain field values (no nested
+--     TArray-bearing structs like the GameplayTagContainer that caused the
+--     {} vs nil bug elsewhere in this file), so that particular crash mode
+--     shouldn't apply here - but that's inference from the property list in
+--     the SDK dump, not an in-game confirmation.
+--   - WorldContextObject is passed as `actor` (the spawned NPC) since it's
+--     a live, valid, world-resident UObject at the point this is called -
+--     any such object should do for a WorldContextObject, but pc or
+--     UEHelpers.GetWorld() are equally plausible if this one doesn't work.
+--   - bAddToWorldItemRuntimeCache is set true to match how a "real" dropped
+--     item would persist/behave, but that's a guess at intended usage, not
+--     something read from a comment or confirmed behavior.
+local function dropItem(ctx, actor, gift)
+    local itemPath = type(gift) == "table" and gift.path or gift
+    local count = (type(gift) == "table" and gift.count) or 1
+    ctx.log("encounter.dropItem: resolving " .. tostring(itemPath) .. " (count " .. count .. ")")
+
+    local itemData = resolveAsset(itemPath)
+    if not itemData then
+        ctx.log("encounter.dropItem: could not resolve item asset: " .. tostring(itemPath))
+        return false
+    end
+
+    local dropClass = resolveAsset(ctx.config.WorldItemDropClassPath)
+    if not isValid(dropClass) then
+        ctx.log("encounter.dropItem: could not resolve WorldItemDropClassPath: " .. tostring(ctx.config.WorldItemDropClassPath))
+        return false
+    end
+
+    local ok_helper, helper = pcall(function()
+        return StaticFindObject("/Script/Dominion.Default__ItemHelperLibrary")
+    end)
+    if not ok_helper or not isValid(helper) then
+        ctx.log("encounter.dropItem: ItemHelperLibrary CDO not found")
+        return false
+    end
+
+    local ok_loc, loc = pcall(function() return actor:K2_GetActorLocation() end)
+    if not ok_loc or not loc then
+        ctx.log("encounter.dropItem: could not get actor location to drop at")
+        return false
+    end
+
+    -- Every field is given explicitly, not left to omission-defaults - the
+    -- {} vs nil GameplayTagContainer bug (see giveItem above) is exactly
+    -- the failure mode of assuming a partially/un-specified struct
+    -- zero-inits the way you'd want.
+    local params = {
+        ItemClass = dropClass,
+        bCreateItem = true,
+        bMagnetize = false, -- literal ground drop, not auto-pulled to the player
+        SpawnedItemData = itemData,
+        CopiedItem = nil,
+        Count = count,
+        Transform = {
+            Translation = loc,
+            Rotation = { Yaw = 0, Pitch = 0, Roll = 0 },
+            Scale3D = { X = 1, Y = 1, Z = 1 },
+        },
+        LaunchDirection = { X = 0, Y = 0, Z = 1 },
+        LaunchSpeed = ctx.config.ItemDropLaunchSpeed or 0.0,
+        LaunchAngleVariance = ctx.config.ItemDropLaunchAngleVariance or 0.0,
+        bSkipFloorSafetyCheck = false,
+        OwnerController = nil,
+        bSpawnOnlyForController = false,
+        PlayerControllerThatDroppedItem = nil,
+        bAddToWorldItemRuntimeCache = true,
+        bMagnetizeToInstigatorOnSpawn = false,
+    }
+
+    ctx.log("encounter.dropItem: attempting SpawnAndLaunchItem_Sync(" .. itemPath .. ")")
+    local ok_spawn, spawned, failureReason = pcall(function()
+        return helper:SpawnAndLaunchItem_Sync(actor, params)
+    end)
+    if not ok_spawn then
+        ctx.log("encounter.dropItem: SpawnAndLaunchItem_Sync failed for " .. itemPath .. ": " .. tostring(spawned))
+        return false
+    end
+    ctx.log("encounter.dropItem: SpawnAndLaunchItem_Sync(" .. itemPath .. ") returned " ..
+        tostring(isValid(spawned)) .. (failureReason and failureReason ~= "" and (", reason: " .. tostring(failureReason)) or ""))
+    return isValid(spawned)
+end
+
 local function actorAddress(actor)
     local ok, addr = pcall(function() return actor:GetAddress() end)
     if ok then return addr end
@@ -180,7 +281,11 @@ local function playSequence(ctx, pc, actor, opts)
     scheduleAfter(opts.giveDelayMs or ctx.config.EncounterGiveDelayMs, function()
         ctx.log("Encounter '" .. opts.displayName .. "': giving " .. tostring(#(opts.gifts or {})) .. " item(s)")
         for _, gift in ipairs(opts.gifts or {}) do
-            giveItem(pc, gift)
+            if ctx.config.GiveItemsAsWorldDrops then
+                dropItem(ctx, actor, gift)
+            else
+                giveItem(pc, gift)
+            end
         end
         if opts.line2 then
             ctx.notify(opts.displayName, opts.line2)
