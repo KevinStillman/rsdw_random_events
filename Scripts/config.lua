@@ -130,7 +130,7 @@ Config.EncounterDespawnDelayMs = 2500 -- delay between giving the item(s)/line2 
 -- comments for the specific unknowns (Transform/FVector marshaling,
 -- WorldContextObject choice). Default false: this is a branch for exploring
 -- the idea, not yet something to ship on by default.
-Config.GiveItemsAsWorldDrops = false
+Config.GiveItemsAsWorldDrops = true
 -- The base "drop a single ItemData as a physical pickup" class - other
 -- variants exist (BP_RuntimeSpawnedWorldItem_NoExpiry/_NoDelayForMagnet/
 -- _ProcessingStation) but this is the plain one, matching "drop it on the
