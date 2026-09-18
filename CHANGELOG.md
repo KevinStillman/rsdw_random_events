@@ -654,3 +654,48 @@
   `pickN(pool, n)` rather than adding a near-identical third roll
   function, and switched Vannaka's own call over to `pickN(pool, 2)` to
   match.
+- Removed all four dev-only debug hotkeys ahead of public testing: `,`
+  (force-trigger, bypassing cooldowns), `[` (destroy orphaned renamed
+  spawns), `.` (discovery tool), and `/` (SDK/object dump). `F` (talk to
+  a spawned event NPC) is untouched - that's real gameplay, not a dev
+  tool. `Encounter.CleanupNamed`/`CleanupNearest` and `Discovery.Run`
+  (the functions those hotkeys called) are still defined in
+  `encounter.lua`/`discovery.lua` but unreachable now - left in place
+  rather than deleted, since nothing else about them changed; wire a
+  temporary `RegisterKeyBind` back up in `main.lua` if they're needed for
+  future dev work. `main.lua`'s now-unused `require("discovery")` was
+  removed. Without the force-trigger hotkey, events now only ever fire on
+  the passive timer (`Config.CheckIntervalMs`/`TriggerChance`) - testers
+  will need to actually wait for one rather than spamming it on demand.
+
+## 0.2.0
+
+Cleaned up for public testing (CurseForge). No gameplay changes beyond
+what's already in the 0.1.0 log above - this release just reflects that
+log in the README and bumps the version. See 0.1.0 above for the full
+blow-by-blow debugging history; this is the short version:
+
+- Six random events: Mysterious Old Man, Drunken Dwarf, Vannaka, Zanik,
+  Cathan, and Postie Pete - each spawns a real Dragonwilds NPC, shows a
+  "Press F for Random Event" prompt nearby, and on `F` plays a line,
+  gives a gift, and despawns.
+- Fixed the real cause behind this project's whole history of
+  intermittent `AddItemByData` crashes: `LoadAsset` silently fails when
+  called off the game thread, which is where `giveItem` was always
+  calling it from. Items now load reliably.
+- Fixed spawned NPCs landing half-buried or floating (ground-snapping),
+  showing a placeholder box at their feet, and not facing the player.
+- Removed all dev-only debug hotkeys (`,`, `[`, `.`, `/`) - see above. `F`
+  is the only hotkey left, for talking to a spawned event NPC.
+- Confirmed in-game across dozens of trigger cycles with no crashes.
+- Rewrote `README.md` to match current reality: all six events (was
+  documented as four), removed the "known limitation" section about
+  pre-tutorial characters crashing (that was the working theory at the
+  time it was written; the real cause turned out to be the
+  `ExecuteInGameThread`/`LoadAsset` bug above, now fixed and confirmed
+  clean across dozens of trials, so the limitation no longer applies),
+  and rewrote the "Testing" section (previously said "I can't launch and
+  play the game myself... this hasn't been run in-game yet," which not
+  only isn't true anymore but also assumed the now-removed `,`
+  force-trigger hotkey). `package.ps1`'s docstring now says "CurseForge,
+  Nexus Mods, or any other UE4SS mod host" instead of just "Nexus Mods."

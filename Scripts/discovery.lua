@@ -1,9 +1,11 @@
--- Dev tool: press Config.HotkeyDiscovery (default '.') near an NPC you want
--- to reuse as a random-event actor, and this logs every nearby Actor's class
--- path + distance + display name to Scripts/discovery_log.txt (gitignored -
--- it's local scratch output, not something to commit). Use one of the
--- logged class paths as Config.DrunkenDwarfClassPath (or a future event's
--- spawn target) in config.lua.
+-- Dev tool: call Discovery.Run() near an NPC you want to reuse as a
+-- random-event actor, and this logs every nearby Actor's class path +
+-- distance + display name to Scripts/discovery_log.txt (gitignored - it's
+-- local scratch output, not something to commit). Use one of the logged
+-- class paths as Config.DrunkenDwarfClassPath (or a future event's spawn
+-- target) in config.lua. Not wired to a hotkey (removed ahead of public
+-- testing, along with the other dev-only hotkeys - see CHANGELOG) - wire
+-- a temporary RegisterKeyBind in main.lua back up if you need this again.
 --
 -- Scans "Actor" rather than just "Pawn": Dragonwilds' dialogue/quest NPCs
 -- (e.g. the Wise Old Man, Vannaka) turned out not to be Pawn-derived at all

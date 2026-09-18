@@ -18,14 +18,6 @@ Config.GlobalCooldownMs = 180000
 -- RegisterKeyBind takes a numeric virtual-key code, not a string - Key is a
 -- global table UE4SS injects into every mod's Lua environment (see
 -- assets/Mods/shared/Types.lua in the UE4SS repo for the full list).
-Config.HotkeyForceTrigger = Key.OEM_COMMA  -- ',' - fire a random event immediately, ignoring cooldowns
-Config.HotkeyForceTriggerLabel = ","
-Config.HotkeyDiscovery = Key.OEM_PERIOD    -- '.' - log nearby actor class paths + player location
-Config.HotkeyDiscoveryLabel = "."
-Config.HotkeyDump = Key.OEM_TWO            -- '/' - dump SDK headers + live object properties (dev tool)
-Config.HotkeyDumpLabel = "/"
-Config.HotkeyCleanup = Key.OEM_FOUR        -- '[' - destroy any orphaned renamed spawns (dev tool)
-Config.HotkeyCleanupLabel = "["
 Config.HotkeyEncounterInteract = Key.F     -- 'F' - trigger a nearby event NPC's encounter
 Config.HotkeyEncounterInteractLabel = "F"
 

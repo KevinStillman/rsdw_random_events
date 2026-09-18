@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Builds a distributable zip of RSDWRandomEvents for Nexus Mods.
+    Builds a distributable zip of RSDWRandomEvents (CurseForge, Nexus Mods,
+    or any other UE4SS mod host).
 
 .DESCRIPTION
     Packages Scripts/*.lua (and LICENSE) into an RSDWRandomEvents/ folder matching the
