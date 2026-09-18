@@ -602,3 +602,55 @@
   a specific message when `K2_SetActorRotation` returns `false`, in case
   this surfaces again for some other actor down the line). Not yet
   re-tested in-game.
+- Confirmed in-game: NPCs now turn to face the player as they walk around.
+- Scoped out two candidate future events via the discovery/dump tools:
+  Cathan (`/Game/Gameplay/NPCs/BP_NPC_GhostCathan_Quest.BP_NPC_GhostCathan_Quest_C`,
+  a ghost variant) and Postie Pete
+  (`/Game/Gameplay/NPCs/Fellhollow_NPCs/BP_NPC_PostiePete.BP_NPC_PostiePete_C`).
+  Neither's own Blueprint adds an extra placeholder mesh variable the way
+  Doric/Vannaka/Zanik's do. Not yet wired into the event registry -
+  pending dialogue/gift decisions.
+- Found a second placeholder mesh while dumping those two:
+  `ReplacementMeshComponent` (a `StaticMeshComponent`, same name-hash and
+  class pointer on both), present on both but not listed in either
+  class's own `CXXHeaderDump` - unlike `ReplacementMesh` (a plain
+  `UPROPERTY` on the native `AInteractableNPC`) or each Blueprint's own
+  extra variable (`StaticMesh_0`, `ReplacementMeshComponent1`, plain
+  `StaticMesh`), this one is Blueprint-authored via
+  SimpleConstructionScript, which is why the header dump (UPROPERTY-only)
+  never showed it. Confirmed present, identically, on Wise Old Man and
+  Doric too via the same object dump - not yet confirmed on Vannaka/Zanik
+  (they weren't loaded in memory for this particular dump), but they
+  share the same `ABP_BaseInteractableNPC_C` parent as the other two, so
+  it's most likely on every spawn target this mod uses, baked into that
+  shared parent Blueprint. `trySpawnNearPlayer` now always also attempts
+  to hide it, alongside `ReplacementMesh`. Unconfirmed until tested
+  in-game: this is the first time this file has relied on `actor[propName]`
+  reaching a named SCS component that isn't also a listed `UPROPERTY`.
+- Added two more events: Cathan (a ghost NPC, `Config.CathanClassPath`)
+  and Postie Pete (`Config.PostiePeteClassPath`), following the exact
+  same spawn/rename/gift pattern as the existing four. Cathan's gift is
+  2x of one random seed from a new `Config.CathanSeedTable` (every Tier1
+  farming seed and tree-planting seed found via the object dump - 29
+  entries, via the existing `pickOne` helper). Postie Pete's gift is
+  fixed rather than random - always all of a new
+  `Config.PostiePeteGifts` (100x Ash Logs, 50x Ash Planks, 25x Oak Logs -
+  Ash/Oak Logs are internally named "Wood", not "Log", same
+  internal-vs-display-name mismatch pattern as Vannaka's Fleece/Scraps
+  items). Both added to the cleanup hotkey's `CleanupNamed`/
+  `CleanupNearest` passes alongside the other four. Not yet tested
+  in-game.
+- Expanded `Config.VannakaLootTable` with six more common monster-drop
+  materials (Bone, Animal Horn, Feathers, Soft Animal Fur, Bird Meat, Game
+  Meat), staying at the same "basic commodity" tier as the original five
+  rather than the rare/boss-locked items also in that item folder (Dragon
+  Blood, Visage, Velgar Head, Kuldra, Abyssal Spine, etc.) - a judgment
+  call, not individually specified, so flagged for the user to correct if
+  any are wrong. Not yet tested in-game.
+- Confirmed in-game: both Cathan and Postie Pete work.
+- Cathan's gift bumped from 2x one random seed to 2x each of 3 random
+  seeds (with replacement - the same seed can come up more than once).
+  Generalized `rollTwice` (Vannaka-specific, always exactly 2 picks) into
+  `pickN(pool, n)` rather than adding a near-identical third roll
+  function, and switched Vannaka's own call over to `pickN(pool, 2)` to
+  match.

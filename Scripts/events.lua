@@ -13,21 +13,23 @@ local function isValid(o)
     return o and o.IsValid and o:IsValid()
 end
 
--- Rolls `lootTable` twice, with replacement (the same entry can come up
--- both times), for Vannaka's "mob loot" gift.
-local function rollTwice(lootTable)
-    if not lootTable or #lootTable == 0 then return {} end
-    return {
-        lootTable[math.random(1, #lootTable)],
-        lootTable[math.random(1, #lootTable)],
-    }
-end
-
 -- Picks one random entry from `pool`, for Zanik's "one random rune" gift
 -- and Mysterious Old Man's gift pool.
 local function pickOne(pool)
     if not pool or #pool == 0 then return nil end
     return pool[math.random(1, #pool)]
+end
+
+-- Picks `n` random entries from `pool`, with replacement (the same entry
+-- can come up more than once) - for Vannaka's "mob loot" gift (n=2) and
+-- Cathan's "3 random seeds" gift (n=3).
+local function pickN(pool, n)
+    local picks = {}
+    for i = 1, n do
+        local pick = pickOne(pool)
+        if pick then table.insert(picks, pick) end
+    end
+    return picks
 end
 
 -- Traces straight down (from well above `z` to well below it) at (x, y)
@@ -239,6 +241,27 @@ local function trySpawnNearPlayer(ctx, classPath, logPrefix, placeholderMeshProp
     -- real box.
     hideComponent("ReplacementMesh")
 
+    -- A second, separate placeholder: dumping Cathan and Postie Pete
+    -- (both new, while scoping them out as future events) turned up a
+    -- `ReplacementMeshComponent` (StaticMeshComponent, same name-hash and
+    -- class pointer on both) that doesn't appear in either class's own
+    -- CXXHeaderDump - unlike `ReplacementMesh` above (a plain UPROPERTY on
+    -- the native AInteractableNPC) or each Blueprint's own extra variable
+    -- (StaticMesh_0, ReplacementMeshComponent1, plain StaticMesh), this
+    -- one is Blueprint-authored (added via SimpleConstructionScript, per
+    -- the object dump), which is why it's invisible to the header dump.
+    -- Confirmed present, identically, on Wise Old Man and Doric too (not
+    -- yet confirmed on Vannaka/Zanik, but they weren't loaded in memory
+    -- for this particular dump - not evidence it's absent, given they
+    -- share the exact same ABP_BaseInteractableNPC_C parent as the other
+    -- two). Most likely baked into that shared parent Blueprint itself,
+    -- i.e. present on every spawn target this mod uses. Always attempted
+    -- for every spawn, same as ReplacementMesh - actor[propName] lookups
+    -- generally reach named SCS components in UE4SS too, but this is the
+    -- first time this file has relied on that for a component that isn't
+    -- also a listed UPROPERTY, so it's unconfirmed until tested in-game.
+    hideComponent("ReplacementMeshComponent")
+
     if placeholderMeshProp then
         hideComponent(placeholderMeshProp)
     end
@@ -313,7 +336,7 @@ table.insert(Events, {
 -- unproven - hence still opt-in. With spawning disabled/unconfigured this
 -- still fires as a toast. Vannaka's a slayer master in OSRS, so his gift
 -- is "mob loot" rather than food/potions/tomes - two rolls (with
--- replacement) on Config.VannakaLootTable.
+-- replacement, via pickN) on Config.VannakaLootTable.
 table.insert(Events, {
     id = "vannaka",
     weight = 3,
@@ -328,7 +351,7 @@ table.insert(Events, {
                     displayName = "Vannaka",
                     line1 = ctx.config.VannakaLine1,
                     line2 = ctx.config.VannakaLine2,
-                    gifts = rollTwice(ctx.config.VannakaLootTable),
+                    gifts = pickN(ctx.config.VannakaLootTable, 2),
                 })
             end
         end
@@ -357,6 +380,64 @@ table.insert(Events, {
                     line1 = ctx.config.ZanikLine1,
                     line2 = ctx.config.ZanikLine2,
                     gifts = rune and { rune } or {},
+                })
+            end
+        end
+    end,
+})
+
+-- Cathan: spawns Dragonwilds' own Cathan ghost NPC, found via the
+-- discovery tool (.) as BP_NPC_GhostCathan_Quest. Not an _FTUE tutorial
+-- NPC like the four above, so the singleton caveat may not apply, but
+-- still opt-in regardless since that's unconfirmed. With spawning
+-- disabled/unconfigured this still fires as a toast. Cathan's gift is 2x
+-- each of 3 random seeds (with replacement, via pickN - the same seed
+-- can come up more than once, same as Vannaka's loot) from
+-- Config.CathanSeedTable.
+table.insert(Events, {
+    id = "cathan",
+    weight = 3,
+    cooldownMs = 10 * 60000,
+    run = function(ctx)
+        ctx.notify("A Random Event Has Spawned!", "Press F to interact with them.")
+
+        if ctx.config.EnableExperimentalSpawns and ctx.config.CathanClassPath then
+            local actor = trySpawnNearPlayer(ctx, ctx.config.CathanClassPath, "cathan", ctx.config.CathanPlaceholderMeshProp)
+            if actor then
+                Encounter.Run(ctx, actor, {
+                    displayName = "Cathan",
+                    line1 = ctx.config.CathanLine1,
+                    line2 = ctx.config.CathanLine2,
+                    gifts = pickN(ctx.config.CathanSeedTable, 3),
+                })
+            end
+        end
+    end,
+})
+
+-- Postie Pete: spawns Dragonwilds' own Postie Pete NPC, found via the
+-- discovery tool (.) as BP_NPC_PostiePete (Fellhollow_NPCs). Not an _FTUE
+-- tutorial NPC like the four originals, so the singleton caveat may not
+-- apply, but still opt-in regardless since that's unconfirmed. With
+-- spawning disabled/unconfigured this still fires as a toast. Gift is
+-- "undelivered building materials" (a delivery/parcel theme, matching the
+-- character) rather than random - always all of
+-- Config.PostiePeteGifts.
+table.insert(Events, {
+    id = "postie_pete",
+    weight = 3,
+    cooldownMs = 10 * 60000,
+    run = function(ctx)
+        ctx.notify("A Random Event Has Spawned!", "Press F to interact with them.")
+
+        if ctx.config.EnableExperimentalSpawns and ctx.config.PostiePeteClassPath then
+            local actor = trySpawnNearPlayer(ctx, ctx.config.PostiePeteClassPath, "postie_pete", ctx.config.PostiePetePlaceholderMeshProp)
+            if actor then
+                Encounter.Run(ctx, actor, {
+                    displayName = "Postie Pete",
+                    line1 = ctx.config.PostiePeteLine1,
+                    line2 = ctx.config.PostiePeteLine2,
+                    gifts = ctx.config.PostiePeteGifts or {},
                 })
             end
         end

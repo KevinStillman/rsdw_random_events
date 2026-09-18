@@ -76,6 +76,12 @@ Config.MysteriousOldManClassPath = "/Game/Gameplay/NPCs/BP_NPC_WiseOldMan_FTUE.B
 Config.DrunkenDwarfClassPath = "/Game/Gameplay/NPCs/BP_NPC_Doric_FTUE.BP_NPC_Doric_FTUE_C" -- Doric is a dwarf
 Config.VannakaClassPath = "/Game/Gameplay/NPCs/BP_NPC_Vannaka_FTUE.BP_NPC_Vannaka_FTUE_C" -- Vannaka is a slayer master
 Config.ZanikClassPath = "/Game/Gameplay/NPCs/BP_NPC_Zanik_FTUE.BP_NPC_Zanik_FTUE_C" -- Zanik is a runecrafting NPC here
+-- Not _FTUE tutorial NPCs like the four above - Cathan is a quest ghost,
+-- Postie Pete a Fellhollow NPC - so the "duplicating a singleton" caveat
+-- may not apply the same way, but unconfirmed either way; same opt-in
+-- treatment regardless. Found via the discovery tool (.).
+Config.CathanClassPath = "/Game/Gameplay/NPCs/BP_NPC_GhostCathan_Quest.BP_NPC_GhostCathan_Quest_C"
+Config.PostiePeteClassPath = "/Game/Gameplay/NPCs/Fellhollow_NPCs/BP_NPC_PostiePete.BP_NPC_PostiePete_C"
 
 -- Each of these _FTUE Blueprints carries its own extra UStaticMeshComponent
 -- variable, separate from the actual skeletal mesh - confirmed via the
@@ -93,6 +99,12 @@ Config.MysteriousOldManPlaceholderMeshProp = "StaticMesh_0"
 Config.DrunkenDwarfPlaceholderMeshProp = "ReplacementMeshComponent1"
 Config.VannakaPlaceholderMeshProp = "StaticMesh"
 Config.ZanikPlaceholderMeshProp = "StaticMesh" -- confirmed via CXXHeaderDump/BP_NPC_Zanik_FTUE.hpp
+-- Neither Cathan's nor Postie Pete's own Blueprint adds an extra
+-- placeholder mesh variable (confirmed via CXXHeaderDump/<class>.hpp) -
+-- both should be covered by the always-attempted ReplacementMesh/
+-- ReplacementMeshComponent hides in trySpawnNearPlayer alone.
+Config.CathanPlaceholderMeshProp = nil
+Config.PostiePetePlaceholderMeshProp = nil
 
 -- ---------------------------------------------------------------------------
 -- Scripted encounters: custom name/dialogue/item-giving for the spawned
@@ -222,12 +234,26 @@ Config.VannakaLine2 = nil -- no closing line specified - just gives the loot and
 -- internally named Skin_Fleece/Skin_Scraps - both live in the same
 -- "Materials_Basic" journal category as their requested names, which is
 -- what ties the two together despite the differing wording.
+-- Expanded with more basic/common monster drops (found via the object
+-- dump, /Game/Gameplay/Items/Resources/Animal/) - deliberately staying at
+-- the same "common commodity material" tier as the original five, not
+-- the rare/boss-locked items also in that folder (Dragon Blood, Visage,
+-- Velgar Head, Kuldra, Abyssal Spine, etc.), which don't fit a random
+-- passive-encounter gift. None of these six are individually confirmed
+-- in-game yet the way the original five are - flag if any turn out
+-- wrong/undesired.
 Config.VannakaLootTable = {
     { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Skin_Fleece.ITEM_Resources_Skin_Fleece", count = 3 },
     { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Coarse_Animal_Fur.ITEM_Resources_Coarse_Animal_Fur", count = 3 },
     { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Skin_Scraps.ITEM_Resources_Skin_Scraps", count = 3 },
     { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Meat_Farm.ITEM_Resources_Meat_Farm", count = 3 },
     { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Animal_Hide.ITEM_Resources_Animal_Hide", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_AnimalBone.ITEM_Resources_AnimalBone", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Animal_Horn.ITEM_Resources_Animal_Horn", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Feathers.ITEM_Resources_Feathers", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Soft_Animal_Fur.ITEM_Resources_Soft_Animal_Fur", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Meat_Bird.ITEM_Resources_Meat_Bird", count = 3 },
+    { path = "/Game/Gameplay/Items/Resources/Animal/ITEM_Resources_Meat_Game.ITEM_Resources_Meat_Game", count = 3 },
 }
 
 Config.ZanikLine1 = "Ooh, a friendly face! I've got runes falling out of my pockets - here, take some, they're no good to me if I can't carry them!"
@@ -248,6 +274,58 @@ Config.ZanikRuneTable = {
     { path = "/Game/Gameplay/Items/Resources/Magic/ITEM_Rune_Law.ITEM_Rune_Law", count = 100 },
     { path = "/Game/Gameplay/Items/Resources/Magic/ITEM_Rune_Cosmic.ITEM_Rune_Cosmic", count = 100 },
     { path = "/Game/Gameplay/Items/Resources/Magic/ITEM_Rune_Astral.ITEM_Rune_Astral", count = 100 },
+}
+
+Config.CathanLine1 = "OooooOOOoooo. OooOO OOOooo! Ahem, sorry. I meant have these farming supplies!"
+Config.CathanLine2 = nil -- no closing line specified - just gives the seeds and disappears
+-- events.lua picks ONE of these at random for Cathan's "2x a random
+-- seed" gift - every Tier1 farming seed found via the object dump
+-- (/Game/.../Farming/Seeds/) plus the tree-planting seeds
+-- (/Game/.../Farming/TreePlanting/), all under the same
+-- ITEM_Farming_Seed_<Name>/ITEM_Farming_TreeSeed_<Name> naming.
+Config.CathanSeedTable = {
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Avantoe.ITEM_Farming_Seed_Avantoe", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Cabbage.ITEM_Farming_Seed_Cabbage", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Cactus_Barrel.ITEM_Farming_Seed_Cactus_Barrel", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Cactus_Bunny.ITEM_Farming_Seed_Cactus_Bunny", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Cactus_Pipe.ITEM_Farming_Seed_Cactus_Pipe", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Cadavaberry.ITEM_Farming_Seed_Cadavaberry", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_CorpseCotton.ITEM_Farming_Seed_CorpseCotton", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Dwellberry.ITEM_Farming_Seed_Dwellberry", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Flax.ITEM_Farming_Seed_Flax", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Harralander.ITEM_Farming_Seed_Harralander", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Irit.ITEM_Farming_Seed_Irit", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Kwuarm.ITEM_Farming_Seed_Kwuarm", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Marrentill.ITEM_Farming_Seed_Marrentill", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Onion.ITEM_Farming_Seed_Onion", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Potato.ITEM_Farming_Seed_Potato", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Pumpkin.ITEM_Farming_Seed_Pumpkin", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Redberry.ITEM_Farming_Seed_Redberry", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Snapdragon.ITEM_Farming_Seed_Snapdragon", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_SwampWeed.ITEM_Farming_Seed_SwampWeed", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_ToadFlax.ITEM_Farming_Seed_ToadFlax", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Tomato.ITEM_Farming_Seed_Tomato", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Watermelon.ITEM_Farming_Seed_Watermelon", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Weed_Desert.ITEM_Farming_Seed_Weed_Desert", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/Seeds/ITEM_Farming_Seed_Wheat.ITEM_Farming_Seed_Wheat", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/TreePlanting/ITEM_Farming_TreeSeed_Ash.ITEM_Farming_TreeSeed_Ash", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/TreePlanting/ITEM_Farming_TreeSeed_Maple.ITEM_Farming_TreeSeed_Maple", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/TreePlanting/ITEM_Farming_TreeSeed_Oak.ITEM_Farming_TreeSeed_Oak", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/TreePlanting/ITEM_Farming_TreeSeed_Willow.ITEM_Farming_TreeSeed_Willow", count = 2 },
+    { path = "/Game/Gameplay/Character/Player/Equipment/Held/Farming/TreePlanting/ITEM_Farming_TreeSeed_Yew.ITEM_Farming_TreeSeed_Yew", count = 2 },
+}
+
+Config.PostiePeteLine1 = "Anyone got post? Oh, hey adventurer! These building materials never got picked up, why don't you have them?"
+Config.PostiePeteLine2 = nil -- no closing line specified - just gives the materials and disappears
+-- Fixed gift, not random-pick like the others - always all three. Ash
+-- Logs/Oak Logs are internally named "Wood", not "Log" (same
+-- internal-vs-display-name pattern as Vannaka's Fleece/Scraps items
+-- above) - confirmed via the object dump
+-- (/Game/Gameplay/Items/Resources/Wood/).
+Config.PostiePeteGifts = {
+    { path = "/Game/Gameplay/Items/Resources/Wood/ITEM_Resources_Wood_Ash.ITEM_Resources_Wood_Ash", count = 100 },
+    { path = "/Game/Gameplay/Items/Resources/Wood/ITEM_Resources_Plank_Ash.ITEM_Resources_Plank_Ash", count = 50 },
+    { path = "/Game/Gameplay/Items/Resources/Wood/ITEM_Resources_Wood_Oak.ITEM_Resources_Wood_Oak", count = 25 },
 }
 
 return Config
