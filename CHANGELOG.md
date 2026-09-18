@@ -338,6 +338,154 @@
   despite not being a plain `UItemData`/`BP_Consumables_*` type. Added to
   the cleanup hotkey's `CleanupNamed`/`CleanupNearest` passes alongside
   the other three events. Not yet tested in-game.
+- A crash: giving Mysterious Old Man's Fishing tome
+  (`ITEM_Consumable_Tome_Tier1_Fishing`) crashed the game outright - same
+  signature as every prior `AddItemByData` engine crash (no catchable Lua
+  error, `UE4SS.log` stops right after the "attempting AddItemByData" log
+  line), on a tutorial-complete character with plenty of free inventory
+  space (passed `CanAddItemByData` first). Initially removed the tome from
+  `Config.MysteriousOldManGiftPool` on the theory it was just a bad
+  item/path (see below for the real cause found right after).
+- Found the real cause, from the *game's own* log
+  (`RSDragonwilds.log`, not `UE4SS.log` - not checked before now) at the
+  exact crash timestamp:
+  ```
+  LogInventoryUI: UQuickAccessBarBase::UpdateContent : Update slot 5
+  LogUObjectGlobals: Warning: Failed to find object '.../T_Icon_Skill_Tome_Fishing...'
+  LogUObjectGlobals: Warning: Failed to find object '.../T_Icon_Tag_Skill_Fishing...'
+  ```
+  `AddItemByData` fires the inventory-changed event, which makes the
+  quick-access-bar UI redraw and look up the new item's skill icon via a
+  plain `FindObject` - a non-loading lookup, the exact same limitation
+  `resolveAsset` already works around for the item asset itself (see its
+  own comment above). "Fishing" is a Game Feature Plugin (confirmed
+  elsewhere in the log: `Game feature 'Fishing' transitioned successfully`)
+  whose UI art apparently only streams into memory once the player
+  actually touches that skill - for a character who never has, the icon
+  isn't resident, `FindObject` comes back empty, and the game goes down a
+  few seconds later. This isn't `ItemsPickedUp`-the-array crashing
+  directly, but it's the same underlying idea the user raised: giving an
+  item nothing has ever "introduced" the player to can misbehave,
+  because it also skips whatever normally streams in that content along
+  the way. This is most likely the real mechanism behind every "no
+  catchable error, AddItemByData just freezes" crash in this project's
+  history so far (Umbral Kebab, Strong Tea, the tomes) - they're all Game
+  Feature Plugin content (`/UmbralSands/...`, `/Fishing/...`,
+  `/Agility/...`), never core `/Game/...` content, and the same item
+  crashing sometimes but not other times lines up with whatever happens to
+  be streamed in at the time, not the item itself.
+- Re-added the Fishing tome, this time with a real fix: `giveItem` (in
+  `encounter.lua`) now takes an optional `iconPreloads` list per gift and
+  force-`LoadAsset`s each path before calling `AddItemByData`, mirroring
+  the item-asset preload it already did. Wired up with the two icon paths
+  the crash log named. Not yet re-confirmed in-game since adding this.
+  The Agility tome is left as-is (no `iconPreloads`, still just flagged as
+  the same risk category) since its icon paths are unconfirmed - the
+  Fishing icon folder layout doesn't even match core `/Game/` skills' own
+  layout, so guessing its path isn't safe. If it crashes, the fix is to
+  check `RSDragonwilds.log` the same way this one was found.
+- Revised the picture again after testing: giving the Magic tome (core
+  `/Game/` content, not a Game Feature Plugin - so the "unstreamed plugin
+  content" theory above doesn't fully hold up) hit the identical
+  `UE4SS.log`-freezes-mid-`AddItemByData` signature and the identical
+  `Failed to find object` warnings for its skill icons in
+  `RSDragonwilds.log`
+  (`/Game/Art/UI/Icons/Skill_Tomes_Concept_Art/T_Icon_Skill_Tome_Magic`,
+  `/Game/Art/UI/Skills/Icons/Tags/T_Icon_Tag_Skill_Magic`) - but this time
+  the game didn't go down. It produced a popup (almost certainly what
+  actually blocked the game thread for the ~2 second gap between
+  `LostFocus`/`ReceivedFocus` in the log), and once dismissed, gameplay
+  resumed completely normally - the item was still in the inventory and
+  usable for XP. So `AddItemByData` itself was never the thing failing;
+  it succeeds natively regardless. What actually gets stuck permanently
+  for the rest of the session is only the *Lua call into it* - no further
+  log line from this mod ever appears after "attempting AddItemByData",
+  which likely also explains the earlier Fishing tome incident (the same
+  popup, just not dismissed the same way that time). Fixed the resulting
+  real bug: `playSequence`'s despawn timer was scheduled *after*
+  `giveItem` returned, so a hung gift call meant the timer never even got
+  registered, permanently orphaning the spawned NPC (stuck until the `[`
+  cleanup hotkey, no closing line). It's now scheduled up front, before
+  `giveItem` runs, so despawn still happens on schedule regardless.
+- Confirmed exactly what the "crash" actually is, from a screenshot of the
+  popup: a UE4SS-native "Fatal Error!" dialog ("Crashdump written to:
+  .../ue4ss/crash_*.dmp") - i.e. UE4SS's own exception handler catching a
+  real native access violation triggered from inside/after the
+  `AddItemByData` call, not a Lua error (so `pcall` can never guard
+  against it) and not the Unreal Engine itself going down. Clicking OK
+  deliberately closes Dragonwilds; clicking back into the game window
+  instead leaves the process running fine, just having abandoned that one
+  native call and its Lua continuation - almost certainly what's actually
+  been behind every "mysterious `AddItemByData` crash" this project has
+  hit, all along.
+- Also found why it's specifically tomes: giving any item shows a fallback
+  placeholder icon in the inventory UI if its real icon isn't resident yet
+  (confirmed - it fixes itself the moment the item is dragged to a new
+  slot, which is a generic engine fallback path, not specific to this
+  mod). Tomes are the exception - their quick-access-bar slot overlays a
+  *second* icon (a skill tag badge) on top of the item icon, and that
+  overlay widget apparently doesn't have the same null-icon fallback,
+  causing the native crash above instead. Generalized the `iconPreloads`
+  fix (previously only on the Fishing tome) to every `/Game/`-mounted
+  Tier1 skill tome in `Config.MysteriousOldManGiftPool` via a new
+  `gameTome(skill)` helper, using the exact folder pattern confirmed via
+  two independent crash logs (Fishing and Magic). The Agility tome is
+  left unpatched (still just flagged) since its icon paths are unconfirmed
+  and Fishing already proved the folder layout isn't consistent across
+  content mounts, so guessing would be unreliable.
+- Found the actual bug behind the Artisan tome still crashing despite the
+  fix above (icon still showed as a placeholder in the inventory even
+  after the crash): its `iconPreloads` `LoadAsset` calls themselves failed
+  every time, with a genuine catchable Lua error this time -
+  `Function 'LoadAsset' can only be called from within the game thread`.
+  Unlike every other native call in this file, `LoadAsset` explicitly
+  refuses to run off the game thread, and `giveItem` runs from deep inside
+  `playSequence`'s `scheduleAfter` (nested `LoopAsync` timers) - which,
+  like the poll loops in `notify.lua`/`prompt.lua` that already needed the
+  identical `ExecuteInGameThread` wrapper for their own widget work, is
+  *not* the game thread, unlike the hotkey/trigger-loop callbacks in
+  `main.lua` that already wrap their work in `ExecuteInGameThread`.
+  This is a much bigger finding than it first looks: `resolveAsset`'s own
+  `LoadAsset` call for the item itself has always silently discarded its
+  `pcall` result, so this exact failure has most likely been happening
+  silently for every single item this mod has ever given, for this
+  project's entire history - an item only ever "worked" when its package
+  happened to already be resident in memory from something unrelated
+  (`StaticFindObject` alone can still find an already-loaded package fine),
+  not because `LoadAsset` was actually succeeding. This is a far simpler,
+  more complete explanation for basically this whole file's history of
+  items being flaky/inconsistent than any of the theories above. Fixed:
+  `resolveAsset` now logs a failed `LoadAsset` instead of discarding it,
+  and `giveItem`'s entire body (item resolution, icon preloads,
+  inventory checks, `AddItemByData`) now runs wrapped in
+  `ExecuteInGameThread`, the same pattern already proven elsewhere in this
+  codebase. Confirmed in-game: ~50 forced random events in a row (cycling
+  through the full tome pool repeatedly, Artisan included) with no crash
+  popups at all - this was the real fix.
+- Confirmed exactly what the crash popup is, from a screenshot: a
+  UE4SS-native "Fatal Error!" dialog ("Crashdump written to:
+  .../ue4ss/crash_*.dmp") - i.e. UE4SS's own exception handler catching a
+  real native access violation, not a Lua error (so `pcall` could never
+  have guarded against it regardless of the thread-affinity bug above) and
+  not the Unreal Engine itself going down. Clicking OK deliberately closes
+  Dragonwilds; clicking back into the game window instead leaves the
+  process running, having only abandoned that one native call and its Lua
+  continuation.
+- Found a serious side effect of that recovery path, though: after the
+  Artisan tome's crash was dismissed by clicking back into the game
+  (not OK), a *subsequent* forced event (Vannaka) spawned and showed its
+  prompt normally, and pressing F logged "playing sequence" - but the
+  "giving N item(s)" line that should follow ~3 seconds later
+  (`Config.EncounterGiveDelayMs`) never appeared, and nothing did for the
+  rest of the session. This suggests a native crash can leave UE4SS's
+  `LoopAsync` scheduler itself in a degraded state afterward, silently
+  dropping later nested timers (the exact mechanism both gift-giving and
+  despawn depend on) even though the game otherwise looks and plays fine.
+  Not something this mod can detect or recover from in Lua. Practical
+  takeaway: if this crash dialog ever appears again, treat it as reason to
+  fully restart the game before continuing to test, not just click back
+  into the window - the fix above should prevent the crash itself from
+  recurring, which would make this moot, but isn't yet re-confirmed.
 - Attempted a fix for spawned NPCs appearing half-embedded in world
   geometry (reported: Vannaka's lower half stuck inside a crate) by
   changing `BeginDeferredActorSpawnFromClass`'s `CollisionHandlingOverride`

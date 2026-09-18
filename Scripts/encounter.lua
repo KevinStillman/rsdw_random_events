@@ -51,84 +51,129 @@ end
 
 -- LoadAsset forces the package to load before StaticFindObject can find
 -- it (see trySpawnNearPlayer in events.lua for the full explanation).
+-- Logs (rather than silently discarding, as before) if the pcall itself
+-- fails - that silence hid this file's biggest bug for its whole history:
+-- see giveItem's comment below.
 local function resolveAsset(path)
-    pcall(LoadAsset, path)
+    local ok_load, err_load = pcall(LoadAsset, path)
+    if not ok_load then
+        log("resolveAsset: LoadAsset(" .. tostring(path) .. ") failed: " .. tostring(err_load))
+    end
     local obj = StaticFindObject(path)
     if isValid(obj) then return obj end
     return nil
 end
 
 -- `gift` is either a plain asset-path string (gives 1) or a
--- { path = "...", count = N } table (gives N) - see
--- Config.MysteriousOldManGiftPool for examples of both forms. N is given
--- as N separate Count=1 calls rather than one Count=N call: the game
--- crashed outright (no catchable Lua error at all - an engine-level
--- crash) the one time a Count=2 call was attempted, while plain Count=1
--- calls had already worked reliably several times before that, so this
--- sidesteps whatever that was rather than risk it again. Logs the gift
--- being attempted *before* calling AddItemByData, so if it crashes again
--- the log at least says which item was responsible (a crash like this
--- doesn't leave anything else to go on).
+-- { path = "...", count = N, iconPreloads = {...} } table (gives N) - see
+-- Config.MysteriousOldManGiftPool for examples. N is given as N separate
+-- Count=1 calls rather than one Count=N call: the game crashed outright
+-- (no catchable Lua error at all - an engine-level crash) the one time a
+-- Count=2 call was attempted, while plain Count=1 calls had already
+-- worked reliably several times before that, so this sidesteps whatever
+-- that was rather than risk it again. Logs the gift being attempted
+-- *before* calling AddItemByData, so if it crashes again the log at least
+-- says which item was responsible (a crash like this doesn't leave
+-- anything else to go on).
+--
+-- `iconPreloads`, if given, is a list of extra asset paths force-loaded
+-- (LoadAsset, same as the item itself) before AddItemByData runs.
+-- Root-caused via the *game's* own log (RSDragonwilds.log, not
+-- UE4SS.log): AddItemByData fires the inventory-changed event, which
+-- makes UQuickAccessBarBase redraw and look up the item's skill icon(s)
+-- via a non-loading FindObject - the exact same "only finds what's
+-- already resident" limitation resolveAsset works around for the item
+-- itself. Ordinary items just fall back to a placeholder icon if that
+-- lookup misses; skill tomes instead hit an unguarded null dereference
+-- in their dual skill-icon/tag-badge overlay widget, which is a genuine
+-- native crash - confirmed via UE4SS's own "Fatal Error!" dialog (a
+-- caught access violation, not a Lua error - pcall can't guard it). See
+-- CHANGELOG.
+--
+-- Everything below is wrapped in ExecuteInGameThread because LoadAsset -
+-- unlike every other native call in this file - explicitly refuses to
+-- run off the game thread ("Function 'LoadAsset' can only be called from
+-- within the game thread"), confirmed in-game via a real Lua error once
+-- resolveAsset's previously-silent pcall around it started being logged.
+-- giveItem is always called from deep inside playSequence's
+-- scheduleAfter (nested LoopAsync timers), which - like the poll loops
+-- in notify.lua/prompt.lua, which needed the identical wrapper for their
+-- own widget work - is not the game thread, unlike the hotkey/trigger-
+-- loop callbacks in main.lua that already wrap their work in
+-- ExecuteInGameThread. Without this, resolveAsset's own LoadAsset call
+-- for the item itself was silently failing here too the entire time
+-- (silently, since nothing checked its pcall result before now) -
+-- StaticFindObject only ever succeeded when the item's package happened
+-- to already be resident from something unrelated. That's most likely
+-- the real explanation for this whole file's history of items working
+-- "most of the time" and inexplicably not otherwise. See CHANGELOG.
 local function giveItem(pc, gift)
     local itemPath = type(gift) == "table" and gift.path or gift
     local count = (type(gift) == "table" and gift.count) or 1
-    log("encounter.giveItem: resolving " .. tostring(itemPath) .. " (count " .. count .. ")")
+    local iconPreloads = type(gift) == "table" and gift.iconPreloads or nil
 
-    local itemData = resolveAsset(itemPath)
-    if not itemData then
-        log("encounter.giveItem: could not resolve item asset: " .. tostring(itemPath))
-        return false
-    end
-    local ok_inv, inv = pcall(function() return pc:GetInventory() end)
-    if not ok_inv or not isValid(inv) then
-        log("encounter.giveItem: GetInventory failed")
-        return false
-    end
+    ExecuteInGameThread(function()
+        log("encounter.giveItem: resolving " .. tostring(itemPath) .. " (count " .. count .. ")")
 
-    local allOk = true
-    for i = 1, count do
-        -- Checked once before: giving Strong Tea crashed the game (same
-        -- signature as the tome crash - no catchable error, right as
-        -- AddItemByData was called) after it had already succeeded twice
-        -- earlier in the same session, so it isn't a fundamentally bad
-        -- item like the tomes were. Most likely explanation: the
-        -- inventory was full/near-full by that point in testing, and
-        -- AddItemByData doesn't handle "no space" gracefully.
-        -- CanAddItemByData is a real check for exactly this - skip
-        -- (log, don't crash) rather than call AddItemByData blind.
-        local ok_can, canAdd = pcall(function() return inv:CanAddItemByData(itemData, 1) end)
-        if not ok_can then
-            log("encounter.giveItem: CanAddItemByData failed for " .. itemPath .. ": " .. tostring(canAdd))
-            allOk = false
-        elseif not canAdd then
-            log("encounter.giveItem: CanAddItemByData(" .. itemPath .. ") says no room [" .. i .. "/" .. count .. "] - skipping, not risking a crash")
-            allOk = false
-        else
-            log("encounter.giveItem: attempting AddItemByData(" .. itemPath .. ") [" .. i .. "/" .. count .. "]")
-            -- (ItemData, Count, DurabilityPercentage, GameplayTagContainer).
-            -- Previously passed {} for the tag container, which crashed
-            -- unpredictably (including once on Umbral Kebab, a
-            -- previously 100%-reliable item on the exact same path) -
-            -- FGameplayTagContainer has two TArray fields (GameplayTags,
-            -- ParentTags) that a bare {} may not reliably zero-init
-            -- through UE4SS's Lua-to-struct marshaling. Passing nil
-            -- instead fixed that - confirmed in-game, clean first-try
-            -- success. Separately, giving an item can still crash if the
-            -- real NPC's own tutorial questline is still active for this
-            -- player (its Blueprint's quest-tracking logic likely isn't
-            -- expecting a duplicate NPC to be the one involved) - a known
-            -- limitation, not something this function can detect safely;
-            -- see README "Custom dialogue and item-giving".
-            local ok_add, result = pcall(function() return inv:AddItemByData(itemData, 1, 1.0, nil) end)
-            if not ok_add then
-                log("encounter.giveItem: AddItemByData failed for " .. itemPath .. ": " .. tostring(result))
-                allOk = false
-            else
-                log("encounter.giveItem: AddItemByData(" .. itemPath .. ") returned " .. tostring(result))
+        local itemData = resolveAsset(itemPath)
+        if not itemData then
+            log("encounter.giveItem: could not resolve item asset: " .. tostring(itemPath))
+            return
+        end
+
+        if iconPreloads then
+            for _, iconPath in ipairs(iconPreloads) do
+                local ok_icon, err_icon = pcall(LoadAsset, iconPath)
+                log("encounter.giveItem: preloading icon " .. tostring(iconPath) .. " " ..
+                    (ok_icon and "succeeded" or ("failed: " .. tostring(err_icon))))
             end
         end
-    end
-    return allOk
+        local ok_inv, inv = pcall(function() return pc:GetInventory() end)
+        if not ok_inv or not isValid(inv) then
+            log("encounter.giveItem: GetInventory failed")
+            return
+        end
+
+        for i = 1, count do
+            -- Checked once before: giving Strong Tea crashed the game (same
+            -- signature as the tome crash - no catchable error, right as
+            -- AddItemByData was called) after it had already succeeded twice
+            -- earlier in the same session, so it isn't a fundamentally bad
+            -- item like the tomes were. Most likely explanation: the
+            -- inventory was full/near-full by that point in testing, and
+            -- AddItemByData doesn't handle "no space" gracefully.
+            -- CanAddItemByData is a real check for exactly this - skip
+            -- (log, don't crash) rather than call AddItemByData blind.
+            local ok_can, canAdd = pcall(function() return inv:CanAddItemByData(itemData, 1) end)
+            if not ok_can then
+                log("encounter.giveItem: CanAddItemByData failed for " .. itemPath .. ": " .. tostring(canAdd))
+            elseif not canAdd then
+                log("encounter.giveItem: CanAddItemByData(" .. itemPath .. ") says no room [" .. i .. "/" .. count .. "] - skipping, not risking a crash")
+            else
+                log("encounter.giveItem: attempting AddItemByData(" .. itemPath .. ") [" .. i .. "/" .. count .. "]")
+                -- (ItemData, Count, DurabilityPercentage, GameplayTagContainer).
+                -- Previously passed {} for the tag container, which crashed
+                -- unpredictably (including once on Umbral Kebab, a
+                -- previously 100%-reliable item on the exact same path) -
+                -- FGameplayTagContainer has two TArray fields (GameplayTags,
+                -- ParentTags) that a bare {} may not reliably zero-init
+                -- through UE4SS's Lua-to-struct marshaling. Passing nil
+                -- instead fixed that - confirmed in-game, clean first-try
+                -- success. Separately, giving an item can still crash if the
+                -- real NPC's own tutorial questline is still active for this
+                -- player (its Blueprint's quest-tracking logic likely isn't
+                -- expecting a duplicate NPC to be the one involved) - a known
+                -- limitation, not something this function can detect safely;
+                -- see README "Custom dialogue and item-giving".
+                local ok_add, result = pcall(function() return inv:AddItemByData(itemData, 1, 1.0, nil) end)
+                if not ok_add then
+                    log("encounter.giveItem: AddItemByData failed for " .. itemPath .. ": " .. tostring(result))
+                else
+                    log("encounter.giveItem: AddItemByData(" .. itemPath .. ") returned " .. tostring(result))
+                end
+            end
+        end
+    end)
 end
 
 local function actorAddress(actor)
@@ -179,16 +224,27 @@ local function playSequence(ctx, pc, actor, opts)
 
     scheduleAfter(opts.giveDelayMs or ctx.config.EncounterGiveDelayMs, function()
         ctx.log("Encounter '" .. opts.displayName .. "': giving " .. tostring(#(opts.gifts or {})) .. " item(s)")
+
+        -- Scheduled up front, before giveItem runs, rather than nested
+        -- inside its completion as before: AddItemByData has been
+        -- observed in-game to sometimes never return control back to
+        -- Lua at all (see CHANGELOG - the item still gets delivered and
+        -- the game keeps running fine, but this Lua callback just never
+        -- continues), which previously meant this despawn timer never
+        -- even got scheduled, permanently orphaning the NPC (stuck until
+        -- the [ cleanup hotkey). Scheduling it first means the NPC still
+        -- cleans up on schedule even if giving items hangs.
+        scheduleAfter(opts.despawnDelayMs or ctx.config.EncounterDespawnDelayMs, function()
+            ctx.log("Encounter '" .. opts.displayName .. "': despawning")
+            pcall(function() actor:K2_DestroyActor() end)
+        end)
+
         for _, gift in ipairs(opts.gifts or {}) do
             giveItem(pc, gift)
         end
         if opts.line2 then
             ctx.notify(opts.displayName, opts.line2)
         end
-        scheduleAfter(opts.despawnDelayMs or ctx.config.EncounterDespawnDelayMs, function()
-            ctx.log("Encounter '" .. opts.displayName .. "': despawning")
-            pcall(function() actor:K2_DestroyActor() end)
-        end)
     end)
 end
 

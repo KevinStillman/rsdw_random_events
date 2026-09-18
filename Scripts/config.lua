@@ -136,19 +136,63 @@ Config.MysteriousOldManLine2 = "Enjoy!"
 -- limitation (see README "Custom dialogue and item-giving") than the
 -- tome itself, given every other item type has worked fine since the
 -- nil fix.
+-- Every Tier1 skill tome crashes (see CHANGELOG) unless its skill's two UI
+-- icons are force-loaded first: giving a tome makes UQuickAccessBarBase
+-- redraw and look up the skill's icon + tag-badge via FindObject (a
+-- non-loading lookup, the same limitation resolveAsset in encounter.lua
+-- already works around for the item asset itself). If either icon isn't
+-- resident yet, that lookup returns nothing, and something downstream in
+-- the tome's dual skill-icon/tag-badge overlay widget dereferences that
+-- null unconditionally - confirmed via UE4SS's own "Fatal Error!" crash
+-- dialog (a caught native access violation, not a Lua error, so pcall
+-- can't guard it - see CHANGELOG). Ordinary non-tome items don't have
+-- this problem: the same missing-icon condition just shows a placeholder
+-- for them instead of crashing. gameTome() builds the { path,
+-- iconPreloads } gift-pool entry for a /Game/-mounted skill from just its
+-- skill name, using the exact folder pattern confirmed via two real
+-- crash logs (Fishing and Magic) - see RSDragonwilds.log next to each
+-- crash's UE4SS.log timestamp for "Failed to find object" if this pattern
+-- ever needs re-confirming for a skill added later.
+local function gameTome(skill)
+    return {
+        path = "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_" .. skill .. ".ITEM_Consumable_Tome_Tier1_" .. skill,
+        iconPreloads = {
+            "/Game/Art/UI/Icons/Skill_Tomes_Concept_Art/T_Icon_Skill_Tome_" .. skill .. ".T_Icon_Skill_Tome_" .. skill,
+            "/Game/Art/UI/Skills/Icons/Tags/T_Icon_Tag_Skill_" .. skill .. ".T_Icon_Tag_Skill_" .. skill,
+        },
+    }
+end
+
 Config.MysteriousOldManGiftPool = {
     { path = "/Game/Gameplay/Items/Consumables/Magic/ITEM_Consumable_Potion_T3_Antipoison.ITEM_Consumable_Potion_T3_Antipoison", count = 2 },
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Attack.ITEM_Consumable_Tome_Tier1_Attack",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Magic.ITEM_Consumable_Tome_Tier1_Magic",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Ranged.ITEM_Consumable_Tome_Tier1_Ranged",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Woodcutting.ITEM_Consumable_Tome_Tier1_Woodcutting",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Mining.ITEM_Consumable_Tome_Tier1_Mining",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Farming.ITEM_Consumable_Tome_Tier1_Farming",
-    "/Fishing/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Fishing.ITEM_Consumable_Tome_Tier1_Fishing",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Runecrafting.ITEM_Consumable_Tome_Tier1_Runecrafting",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Construction.ITEM_Consumable_Tome_Tier1_Construction",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Artisan.ITEM_Consumable_Tome_Tier1_Artisan",
-    "/Game/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Cooking.ITEM_Consumable_Tome_Tier1_Cooking",
+    gameTome("Attack"),
+    gameTome("Magic"),
+    gameTome("Ranged"),
+    gameTome("Woodcutting"),
+    gameTome("Mining"),
+    gameTome("Farming"),
+    -- Fishing is a Game Feature Plugin, not /Game/ - gameTome()'s pattern
+    -- doesn't apply (confirmed via its own crash log: its icons share one
+    -- "Fishing_Skill_Icons" folder, unlike /Game/'s separate
+    -- Skill_Tomes_Concept_Art / Skills/Icons/Tags split).
+    {
+        path = "/Fishing/Gameplay/Items/Consumables/Tomes/ITEM_Consumable_Tome_Tier1_Fishing.ITEM_Consumable_Tome_Tier1_Fishing",
+        iconPreloads = {
+            "/Fishing/Art/UI/Icons/Fishing_Skill_Icons/T_Icon_Skill_Tome_Fishing.T_Icon_Skill_Tome_Fishing",
+            "/Fishing/Art/UI/Icons/Fishing_Skill_Icons/T_Icon_Tag_Skill_Fishing.T_Icon_Tag_Skill_Fishing",
+        },
+    },
+    gameTome("Runecrafting"),
+    gameTome("Construction"),
+    gameTome("Artisan"),
+    gameTome("Cooking"),
+    -- Agility is its own content mount too (/Agility/...), like Fishing -
+    -- but unlike Fishing, its icon paths are unconfirmed, and Fishing's
+    -- own folder layout already isn't consistent with /Game/'s, so there's
+    -- no safe pattern to guess from. Left without iconPreloads for now -
+    -- if it crashes, check RSDragonwilds.log the same way Fishing's and
+    -- Magic's were found (search near the crash's UE4SS.log timestamp for
+    -- "Failed to find object" lines under /Agility/...).
     "/Agility/Gameplay/Items/Tomes/ITEM_Consumable_Tome_Tier1_Agility.ITEM_Consumable_Tome_Tier1_Agility",
 }
 
