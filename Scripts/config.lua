@@ -85,13 +85,14 @@ Config.ZanikClassPath = "/Game/Gameplay/NPCs/BP_NPC_Zanik_FTUE.BP_NPC_Zanik_FTUE
 -- repositions it somehow; our runtime spawn doesn't replicate whatever
 -- does that, so it renders as a box wherever the NPC is spawned (reported:
 -- Vannaka standing on/inside a crate no matter where he appears).
--- trySpawnNearPlayer hides the named component, if any, right after spawn.
--- Property name found per-class from CXXHeaderDump/<class>.hpp - nil means
--- not yet confirmed (class not dumped, e.g. Zanik hasn't been spawned in-game).
+-- trySpawnNearPlayer hides the named component, if any, right after spawn -
+-- on top of always trying to hide the shared AInteractableNPC.ReplacementMesh
+-- base-class component too (see its own comment in events.lua). Property
+-- name found per-class from CXXHeaderDump/<class>.hpp.
 Config.MysteriousOldManPlaceholderMeshProp = "StaticMesh_0"
 Config.DrunkenDwarfPlaceholderMeshProp = "ReplacementMeshComponent1"
 Config.VannakaPlaceholderMeshProp = "StaticMesh"
-Config.ZanikPlaceholderMeshProp = nil
+Config.ZanikPlaceholderMeshProp = "StaticMesh" -- confirmed via CXXHeaderDump/BP_NPC_Zanik_FTUE.hpp
 
 -- ---------------------------------------------------------------------------
 -- Scripted encounters: custom name/dialogue/item-giving for the spawned

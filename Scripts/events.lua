@@ -30,6 +30,56 @@ local function pickOne(pool)
     return pool[math.random(1, #pool)]
 end
 
+-- Traces straight down (from well above `z` to well below it) at (x, y)
+-- and returns the hit location's Z, or nil if the trace found no ground.
+-- Used by trySpawnNearPlayer to fix spawns landing half-buried or
+-- floating: BeginDeferredActorSpawnFromClass's own
+-- AdjustIfPossibleButAlwaysSpawn collision handling only nudges a spawn
+-- to clear overlapping geometry at the Z it's given - it never adjusts
+-- for terrain height, which is why just reusing the player's own Z
+-- (previously the entirety of the spawn Z logic) broke down on any slope
+-- where the ground height at the offset spawn point differs from the
+-- ground height under the player.
+--
+-- LineTraceSingle takes an FHitResult& out-parameter. Confirmed in-game
+-- that passing `nil` for it is wrong - UE4SS's real convention for an
+-- `Out` struct parameter is to pass an actual (empty) table, which the
+-- call then fills in place; `nil` errored with "Tried storing reference
+-- to a Lua table for an 'Out' parameter... but no table was on the
+-- stack." Trace channel 0 is still a guess (Visibility, the common
+-- default in a fresh UE project).
+--
+-- `ignoreActor`, if given, is excluded from the trace via ActorsToIgnore.
+-- Needed for the player's own trace below: the trace starts 500 units
+-- straight above the traced point, which for the player's own (x, y) is
+-- directly in line with their own capsule/mesh - without this, the
+-- "ground" it finds is most likely the top of the player's own head, not
+-- the actual ground beneath them. Confirmed in-game to matter: without
+-- it, spawns ended up sunk almost entirely underground (only heads
+-- visible), consistent with the learned "height above ground" offset in
+-- trySpawnNearPlayer coming out far too small (or negative) because
+-- "player ground" was really "top of the player."
+local function traceGroundZ(world, ksl, x, y, z, ignoreActor)
+    local start = { X = x, Y = y, Z = z + 500.0 }
+    local finish = { X = x, Y = y, Z = z - 2000.0 }
+    local outHit = {}
+    local ignoreList = ignoreActor and { ignoreActor } or {}
+    local ok, hit = pcall(function()
+        return ksl:LineTraceSingle(world, start, finish, 0, false, ignoreList, 0, outHit, false, {}, {}, 0.0)
+    end)
+    if not ok then
+        return nil, "LineTraceSingle failed: " .. tostring(hit)
+    end
+    if not hit then
+        return nil, "no ground hit"
+    end
+    local hitLoc = outHit.Location
+    if not hitLoc then
+        return nil, "hit result had no Location"
+    end
+    return hitLoc.Z, nil
+end
+
 -- Spawns an actor of `classPath` a few meters in front of the player.
 -- Shared by every spawn-capable event, gated by the caller on
 -- Config.EnableExperimentalSpawns - see README "Filling in a spawn target"
@@ -71,7 +121,39 @@ local function trySpawnNearPlayer(ctx, classPath, logPrefix, placeholderMeshProp
     -- all land in the exact same spot on top of each other.
     local angle = math.random() * 2 * math.pi
     local offsetDist = 300.0
-    local spawnLoc = { X = loc.X + offsetDist * math.cos(angle), Y = loc.Y + offsetDist * math.sin(angle), Z = loc.Z }
+    local spawnX, spawnY = loc.X + offsetDist * math.cos(angle), loc.Y + offsetDist * math.sin(angle)
+
+    -- Ground-snap: reusing the player's own Z verbatim (the entire spawn
+    -- Z logic before this) only looks right on flat ground, since the
+    -- offset point can sit at a different terrain height than the player
+    -- on any slope or ledge. Trace the ground under the player and under
+    -- the offset point, and apply the same "height above ground" the
+    -- player has to the spawn point - this should hold regardless of
+    -- whether an actor's own location pivot is at its feet or its
+    -- capsule center, since it's learned from the player's own actor
+    -- rather than assumed as a fixed number. Falls back to the player's
+    -- raw Z (old behavior) if either trace fails.
+    local spawnZ = loc.Z
+    local ok_ksl, ksl = pcall(function()
+        return StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    end)
+    if ok_ksl and isValid(ksl) then
+        local playerGroundZ, playerErr = traceGroundZ(world, ksl, loc.X, loc.Y, loc.Z, pawn)
+        local spawnGroundZ, spawnErr = traceGroundZ(world, ksl, spawnX, spawnY, loc.Z)
+        if playerGroundZ and spawnGroundZ then
+            spawnZ = spawnGroundZ + (loc.Z - playerGroundZ)
+            ctx.log(logPrefix .. ": ground-snapped spawn Z (player Z " .. tostring(loc.Z) ..
+                ", player ground " .. tostring(playerGroundZ) ..
+                ", spawn ground " .. tostring(spawnGroundZ) .. ", final spawn Z " .. tostring(spawnZ) .. ")")
+        else
+            ctx.log(logPrefix .. ": ground trace incomplete (player: " .. tostring(playerErr) ..
+                ", spawn: " .. tostring(spawnErr) .. ") - using player's own Z")
+        end
+    else
+        ctx.log(logPrefix .. ": KismetSystemLibrary CDO not found - using player's own Z")
+    end
+
+    local spawnLoc = { X = spawnX, Y = spawnY, Z = spawnZ }
     local spawnRot = { Yaw = 0, Pitch = 0, Roll = 0 }
     local spawnScale = { X = 1, Y = 1, Z = 1 }
 
@@ -112,18 +194,53 @@ local function trySpawnNearPlayer(ctx, classPath, logPrefix, placeholderMeshProp
         gsl:FinishSpawningActor(actor, { Translation = spawnLoc, Rotation = spawnRot, Scale3D = spawnScale }, 0)
     end)
 
-    if placeholderMeshProp then
+    -- These NPC classes are normally hand-placed by a level designer and
+    -- never moved again, so their RootComponent's Mobility is most likely
+    -- Static - confirmed in-game: encounter.lua's continuous face-the-
+    -- player rotation was calling K2_SetActorRotation successfully (no
+    -- Lua error) every poll tick, but it returned false every time and a
+    -- readback showed the rotation never actually changed from spawn -
+    -- the classic signature of a Static component silently refusing a
+    -- runtime move, by Unreal's own design (only Movable components can
+    -- be moved/rotated after BeginPlay). SetMobility(Movable) on our
+    -- spawned copy's RootComponent only, right after spawning - never
+    -- touches the real, level-placed instance.
+    local ok_mobility, err_mobility = pcall(function()
+        actor.RootComponent:SetMobility(2) -- EComponentMobility::Movable
+    end)
+    ctx.log(logPrefix .. ": SetMobility(Movable) on RootComponent " ..
+        (ok_mobility and "succeeded" or ("failed: " .. tostring(err_mobility))))
+
+    local function hideComponent(propName)
         local ok_hide, err = pcall(function()
-            local comp = actor[placeholderMeshProp]
+            local comp = actor[propName]
             if isValid(comp) then
                 comp:SetVisibility(false, false)
             end
         end)
         if ok_hide then
-            ctx.log(logPrefix .. ": hid placeholder mesh component '" .. placeholderMeshProp .. "'")
+            ctx.log(logPrefix .. ": hid placeholder mesh component '" .. propName .. "'")
         else
-            ctx.log(logPrefix .. ": failed to hide placeholder mesh component '" .. placeholderMeshProp .. "': " .. tostring(err))
+            ctx.log(logPrefix .. ": failed to hide placeholder mesh component '" .. propName .. "': " .. tostring(err))
         end
+    end
+
+    -- AInteractableNPC (the native base class every one of these four
+    -- spawn targets ultimately derives from, confirmed via
+    -- CXXHeaderDump/Dominion.hpp) has its own UStaticMeshComponent*
+    -- ReplacementMesh, separate from whatever extra placeholder mesh
+    -- property each Blueprint subclass adds on top (StaticMesh_0,
+    -- ReplacementMeshComponent1, or plain StaticMesh - see each
+    -- CXXHeaderDump/<class>.hpp). Always attempted for every spawn,
+    -- regardless of placeholderMeshProp: for Vannaka/Zanik, hiding just
+    -- their own subclass-level StaticMesh was confirmed in-game to not
+    -- actually stop the box appearing at their legs, so it's most likely
+    -- this shared base-class component, not their subclass's, that's the
+    -- real box.
+    hideComponent("ReplacementMesh")
+
+    if placeholderMeshProp then
+        hideComponent(placeholderMeshProp)
     end
 
     return actor

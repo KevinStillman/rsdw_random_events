@@ -338,6 +338,30 @@
   despite not being a plain `UItemData`/`BP_Consumables_*` type. Added to
   the cleanup hotkey's `CleanupNamed`/`CleanupNearest` passes alongside
   the other three events. Not yet tested in-game.
+- Attempted a fix for spawned NPCs appearing half-embedded in world
+  geometry (reported: Vannaka's lower half stuck inside a crate) by
+  changing `BeginDeferredActorSpawnFromClass`'s `CollisionHandlingOverride`
+  from `0` (Undefined) to `2` (`AdjustIfPossibleButAlwaysSpawn`), to nudge
+  the spawn point clear of nearby props. This was the wrong diagnosis -
+  see below - but the change itself is harmless (still a reasonable
+  collision-handling default) and was left in.
+- Found the real cause: not world geometry at all - the crate/box
+  appears "no matter where he spawns" because it's baked into Vannaka's
+  own Blueprint. Confirmed via a fresh SDK dump (`/`) taken while the bug
+  was visible plus the class's `CXXHeaderDump/BP_NPC_Vannaka_FTUE.hpp`:
+  the class has its own `UStaticMeshComponent* StaticMesh` variable,
+  entirely separate from the actual skeletal mesh, attached at a fixed
+  offset relative to the actor root. Checked the other two working NPCs'
+  headers too - both have the identical pattern (Wise Old Man:
+  `StaticMesh_0`; Doric: `ReplacementMeshComponent1`, a name that all but
+  confirms it's a placeholder/stand-in prop). The level's hand-placed
+  instance evidently hides or repositions this somehow that our runtime
+  spawn doesn't replicate. Added `Config.<Event>PlaceholderMeshProp`
+  entries naming each class's component property, and
+  `trySpawnNearPlayer` now hides that component (`SetVisibility(false,
+  false)`) right after spawning, for whichever events have a confirmed
+  property name. Zanik's is left `nil` (unconfirmed - not yet spawned
+  in-game to dump its header). Not yet retested in-game.
 - A crash: giving Mysterious Old Man's Fishing tome
   (`ITEM_Consumable_Tome_Tier1_Fishing`) crashed the game outright - same
   signature as every prior `AddItemByData` engine crash (no catchable Lua
@@ -486,27 +510,95 @@
   fully restart the game before continuing to test, not just click back
   into the window - the fix above should prevent the crash itself from
   recurring, which would make this moot, but isn't yet re-confirmed.
-- Attempted a fix for spawned NPCs appearing half-embedded in world
-  geometry (reported: Vannaka's lower half stuck inside a crate) by
-  changing `BeginDeferredActorSpawnFromClass`'s `CollisionHandlingOverride`
-  from `0` (Undefined) to `2` (`AdjustIfPossibleButAlwaysSpawn`), to nudge
-  the spawn point clear of nearby props. This was the wrong diagnosis -
-  see below - but the change itself is harmless (still a reasonable
-  collision-handling default) and was left in.
-- Found the real cause: not world geometry at all - the crate/box
-  appears "no matter where he spawns" because it's baked into Vannaka's
-  own Blueprint. Confirmed via a fresh SDK dump (`/`) taken while the bug
-  was visible plus the class's `CXXHeaderDump/BP_NPC_Vannaka_FTUE.hpp`:
-  the class has its own `UStaticMeshComponent* StaticMesh` variable,
-  entirely separate from the actual skeletal mesh, attached at a fixed
-  offset relative to the actor root. Checked the other two working NPCs'
-  headers too - both have the identical pattern (Wise Old Man:
-  `StaticMesh_0`; Doric: `ReplacementMeshComponent1`, a name that all but
-  confirms it's a placeholder/stand-in prop). The level's hand-placed
-  instance evidently hides or repositions this somehow that our runtime
-  spawn doesn't replicate. Added `Config.<Event>PlaceholderMeshProp`
-  entries naming each class's component property, and
-  `trySpawnNearPlayer` now hides that component (`SetVisibility(false,
-  false)`) right after spawning, for whichever events have a confirmed
-  property name. Zanik's is left `nil` (unconfirmed - not yet spawned
-  in-game to dump its header). Not yet retested in-game.
+- Confirmed in-game: ~50 forced random events, cycling the full tome pool
+  (Artisan included) repeatedly, with no crash popups at all.
+- Investigated Vannaka/Zanik still showing a box at their legs despite
+  `trySpawnNearPlayer` already hiding each one's own subclass-level
+  placeholder mesh (`StaticMesh` on both, confirmed via a fresh
+  `CXXHeaderDump/BP_NPC_Zanik_FTUE.hpp` - it's not `nil`/unconfirmed
+  anymore). Found the real culprit via `CXXHeaderDump/Dominion.hpp`:
+  `AInteractableNPC`, the native base class all four spawn targets
+  ultimately derive from, has its own separate
+  `UStaticMeshComponent* ReplacementMesh` - distinct from whatever extra
+  placeholder mesh property each Blueprint subclass adds on top
+  (`StaticMesh_0` for Wise Old Man, `ReplacementMeshComponent1` for
+  Doric, plain `StaticMesh` for Vannaka/Zanik). Hiding only the
+  subclass-level one was apparently enough for Wise Old Man/Doric but not
+  Vannaka/Zanik, which suggests this shared base component is the actual
+  box for those two. `trySpawnNearPlayer` now always also hides
+  `ReplacementMesh` for every spawn, regardless of `placeholderMeshProp`.
+  Set `Config.ZanikPlaceholderMeshProp` to `"StaticMesh"` (previously
+  `nil`, pending this exact dump). Not yet confirmed in-game.
+- Confirmed in-game: the box at Vannaka/Zanik's legs is gone.
+- Started on spawns landing half-buried or floating: `trySpawnNearPlayer`
+  previously just reused the player's own Z for the spawn location
+  (offset only in X/Y), which only looks right on flat ground -
+  `BeginDeferredActorSpawnFromClass`'s `AdjustIfPossibleButAlwaysSpawn`
+  collision handling only nudges a spawn to clear overlapping geometry at
+  the Z it's given, it never adjusts for terrain height. Added a ground
+  trace (`UKismetSystemLibrary:LineTraceSingle`, via its CDO, the same
+  pattern already used for `GameplayStatics`): traces straight down under
+  both the player and the offset spawn point, then applies the player's
+  own "height above ground" to the spawn point, rather than assuming a
+  fixed capsule height - this should hold regardless of whether an
+  actor's location pivot is at its feet or its center, since it's learned
+  from the player's own actor. Falls back to the player's raw Z (the old
+  behavior) if either trace comes back empty. `LineTraceSingle` takes an
+  `FHitResult&` out-parameter, which - unlike the enum out-param flagged
+  as unverified elsewhere in this codebase - hasn't been specifically
+  confirmed in-game before now; logged clearly either way. Trace channel
+  `0` is a guess (Visibility, the common default in a fresh UE project).
+  Not yet tested in-game.
+- Fixed the ground trace itself: confirmed in-game every trace was
+  failing with "Tried storing reference to a Lua table for an 'Out'
+  parameter... but no table was on the stack" - the guessed convention
+  above (out-params come back as extra return values) was wrong for this
+  function. The real convention for an `Out` struct parameter is to pass
+  an actual (empty) table in as the argument, which the call fills in
+  place - passing `nil` (as done before) doesn't work. Fixed by passing a
+  real table for `OutHit` and reading `outHit.Location.Z` from it after
+  the call instead of expecting it back as an extra return value. Not yet
+  re-tested in-game.
+- That made it worse, not better: confirmed in-game, spawns ended up
+  sunk almost entirely underground (only heads visible). Root cause: the
+  trace under the player starts 500 units straight above the player's own
+  (x, y), which is directly in line with their own capsule/mesh - without
+  excluding the player from that trace, it was most likely hitting the
+  top of the player's own body instead of the actual ground beneath them,
+  making the learned "height above ground" offset come out far too small
+  (or negative). `traceGroundZ` now takes an optional `ignoreActor`, and
+  the player's own trace passes the player's pawn to exclude it via
+  `ActorsToIgnore`. Also added the player's raw Z and the final computed
+  spawn Z to the "ground-snapped" log line for easier diagnosis next time.
+  Not yet re-tested in-game.
+- Confirmed in-game: ground-snapping works correctly now.
+- Added continuous face-the-player rotation for every tracked (spawned,
+  awaiting-F) NPC, piggybacked onto the existing 300ms proximity poll in
+  `encounter.lua` that already drives the "Press F" prompt, rather than a
+  new timer. `findNearbyTrackedActor` now also returns the player's
+  location (previously only computed internally and discarded) since the
+  poll loop needs it every tick regardless of whether any NPC currently
+  qualifies for the prompt. Uses `K2_SetActorRotation` (confirmed present
+  on `AActor` via `CXXHeaderDump/Engine.hpp`) with a yaw computed via
+  `atan2` (Lua 5.4 folds `atan2` into two-argument `math.atan`, checked
+  for both forms). Not yet tested in-game.
+- Confirmed in-game the rotation never actually happened: added temporary
+  verbose logging (yaw computed, `K2_SetActorRotation`'s own return
+  value, and a readback of the actor's rotation right after the call) to
+  `faceTrackedActorsTowards`. The call itself never errored, but
+  `setResult` was `false` on every single call and the readback always
+  showed the original spawn rotation (0/0/0), regardless of the computed
+  yaw - the classic symptom of a `Static`-mobility component silently
+  refusing a runtime move, which Unreal disallows by design (only
+  `Movable` components can be moved/rotated after `BeginPlay`). These NPC
+  classes are normally hand-placed by a level designer and never moved
+  again, so a `Static` RootComponent makes sense as their default.
+  Confirmed `USceneComponent::SetMobility(EComponentMobility::Type)`
+  exists via `CXXHeaderDump/Engine.hpp` (`Movable = 2`, from
+  `CXXHeaderDump/Engine_enums.hpp`). `trySpawnNearPlayer` now calls
+  `actor.RootComponent:SetMobility(2)` right after spawning, on our
+  spawned copy only - never touches the real, level-placed instance.
+  Reverted `faceTrackedActorsTowards`'s logging back to failure-only (plus
+  a specific message when `K2_SetActorRotation` returns `false`, in case
+  this surfaces again for some other actor down the line). Not yet
+  re-tested in-game.

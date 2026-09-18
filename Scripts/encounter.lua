@@ -191,8 +191,12 @@ local tracked = {}
 local promptCurrentlyOn = false
 local pollActive = false
 
--- Returns (addr, entry, pc) for whichever tracked actor is closest to the
--- player and within its own radius, or nil if none qualify.
+-- Returns (addr, entry, pc, ploc) for whichever tracked actor is closest
+-- to the player and within its own radius (addr/entry nil if none
+-- qualify), or plain nil if the player itself couldn't be resolved.
+-- pc/ploc are returned even when no actor qualifies, since callers like
+-- the poll loop below need the player's location regardless of whether
+-- anything is currently in range.
 local function findNearbyTrackedActor()
     local ok_pc, pc = pcall(UEHelpers.GetPlayerController)
     if not ok_pc or not isValid(pc) then return nil end
@@ -214,8 +218,7 @@ local function findNearbyTrackedActor()
             end
         end
     end
-    if not bestAddr then return nil end
-    return bestAddr, bestEntry, pc
+    return bestAddr, bestEntry, pc, ploc
 end
 
 -- line1 -> (delay) -> give items -> line2 (optional) -> (delay) -> despawn.
@@ -248,19 +251,66 @@ local function playSequence(ctx, pc, actor, opts)
     end)
 end
 
+-- atan2 as a two-argument call: Lua 5.4 (UE4SS's interpreter) folds it
+-- into math.atan(y, x), but math.atan2 is checked first in case that
+-- ever changes - cheap insurance, not a confirmed compatibility issue.
+local function yawTowards(dx, dy)
+    if math.atan2 then
+        return math.deg(math.atan2(dy, dx))
+    end
+    return math.deg(math.atan(dy, dx))
+end
+
+-- Turns every tracked actor to face the player's current position -
+-- called every poll tick (300ms) so a waiting NPC keeps facing the
+-- player as they walk around it, not just whichever angle it happened to
+-- spawn facing. Piggybacks on the same poll loop that already drives the
+-- "Press F" prompt rather than running its own timer.
+-- Diagnosed in-game: K2_SetActorRotation was returning false every call
+-- (readback confirmed the rotation never actually changed) - the classic
+-- symptom of a Static-mobility RootComponent silently refusing a runtime
+-- move, by Unreal's own design. Fixed in events.lua's trySpawnNearPlayer
+-- (SetMobility(Movable) right after spawn), not here.
+local function faceTrackedActorsTowards(ploc)
+    for _, entry in pairs(tracked) do
+        if isValid(entry.actor) then
+            local ok_aloc, aloc = pcall(function() return entry.actor:K2_GetActorLocation() end)
+            if ok_aloc and aloc then
+                local yaw = yawTowards(ploc.X - aloc.X, ploc.Y - aloc.Y)
+                local ok_rot, result = pcall(function()
+                    return entry.actor:K2_SetActorRotation({ Pitch = 0, Yaw = yaw, Roll = 0 }, false)
+                end)
+                if not ok_rot then
+                    log("faceTrackedActorsTowards: K2_SetActorRotation failed: " .. tostring(result))
+                elseif not result then
+                    log("faceTrackedActorsTowards: K2_SetActorRotation returned false (rotation rejected)")
+                end
+            else
+                log("faceTrackedActorsTowards: K2_GetActorLocation failed: " .. tostring(aloc))
+            end
+        end
+    end
+end
+
 -- Starts the proximity poll that drives the "Press F for Random Event"
--- prompt's visibility. Idempotent - only one poll loop ever runs,
--- regardless of how many events have spawned NPCs.
+-- prompt's visibility (and, since it already runs on a timer anyway,
+-- keeps every tracked NPC facing the player). Idempotent - only one poll
+-- loop ever runs, regardless of how many events have spawned NPCs.
 local function ensurePollRunning()
     if pollActive or not LoopAsync then return end
     pollActive = true
     LoopAsync(300, function()
-        local addr = findNearbyTrackedActor()
+        local addr, _, _, ploc = findNearbyTrackedActor()
         local shouldShow = addr ~= nil
         if shouldShow ~= promptCurrentlyOn then
             promptCurrentlyOn = shouldShow
             Prompt.SetVisible(shouldShow, "Press F for Random Event")
         end
+
+        if ploc then
+            faceTrackedActorsTowards(ploc)
+        end
+
         return false -- keep looping for the lifetime of the process
     end)
 end
